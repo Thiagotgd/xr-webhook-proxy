@@ -5,6 +5,7 @@ const PORT = process.env.PORT || 3000;
 const UPDATE_SECRET = process.env.UPDATE_SECRET || 'xr-proxy-update-2024';
 
 // Current target URL for forwarding webhooks
+// Falls back to INITIAL_TARGET env var on cold start (Render free tier resets memory)
 let targetUrl = process.env.INITIAL_TARGET || '';
 
 const server = http.createServer((req, res) => {
