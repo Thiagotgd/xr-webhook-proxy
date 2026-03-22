@@ -1,0 +1,9 @@
+{
+  "name": "xr-webhook-proxy",
+  "version": "1.0.0",
+  "description": "Webhook proxy for XR Fila - forwards CFAZ webhooks to current tunnel URL",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
