@@ -3,6 +3,7 @@ const https = require('https');
 
 const PORT = process.env.PORT || 3000;
 const UPDATE_SECRET = process.env.UPDATE_SECRET || 'xr-proxy-update-2024';
+const TARGET_WEBHOOK_TOKEN = process.env.TARGET_WEBHOOK_TOKEN || 'zo02xvbo62bps9s7va9q6';
 
 // Current target URL for forwarding webhooks
 // Falls back to INITIAL_TARGET env var on cold start (Render free tier resets memory)
@@ -73,10 +74,13 @@ const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', c => body += c);
     req.on('end', () => {
-      const forwardUrl = targetUrl.replace(/\/+$/, '') + '/webhook/cfaz';
-      console.log(`[PROXY] Forwarding to: ${forwardUrl}`);
+      const forwardUrl = new URL(targetUrl.replace(/\/+$/, '') + '/webhook/cfaz');
+      if (TARGET_WEBHOOK_TOKEN && !forwardUrl.searchParams.get('token')) {
+        forwardUrl.searchParams.set('token', TARGET_WEBHOOK_TOKEN);
+      }
+      console.log(`[PROXY] Forwarding to: ${forwardUrl.toString()}`);
 
-      const parsed = new URL(forwardUrl);
+      const parsed = forwardUrl;
       const options = {
         hostname: parsed.hostname,
         port: parsed.port || 443,
@@ -88,16 +92,18 @@ const server = http.createServer((req, res) => {
         }
       };
 
-      // Copy auth headers
+      // Copy auth headers / force target token when source does not provide one
       if (req.headers['x-webhook-token']) options.headers['X-Webhook-Token'] = req.headers['x-webhook-token'];
+      else if (TARGET_WEBHOOK_TOKEN) options.headers['X-Webhook-Token'] = TARGET_WEBHOOK_TOKEN;
       if (req.headers['authorization']) options.headers['Authorization'] = req.headers['authorization'];
 
-      const proto = parsed.protocol === 'https:' ? https : http;
-      const fwdReq = proto.request(options, (fwdRes) => {
-        let respBody = '';
-        fwdRes.on('data', c => respBody += c);
+       const proto = parsed.protocol === 'https:' ? https : http;
+       const fwdReq = proto.request(options, (fwdRes) => {
+         let respBody = '';
+         fwdRes.on('data', c => respBody += c);
         fwdRes.on('end', () => {
           console.log(`[PROXY] Forward response: ${fwdRes.statusCode}`);
+          if (res.writableEnded) return;
           res.writeHead(fwdRes.statusCode, { 'Content-Type': 'application/json' });
           res.end(respBody);
         });
@@ -105,16 +111,17 @@ const server = http.createServer((req, res) => {
 
       fwdReq.on('error', (err) => {
         console.log(`[PROXY] Forward error: ${err.message}`);
+        if (res.writableEnded) return;
         res.writeHead(502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'forward failed', detail: err.message }));
       });
 
       fwdReq.setTimeout(10000, () => {
         fwdReq.destroy();
+        if (res.writableEnded) return;
         res.writeHead(504, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'forward timeout' }));
       });
-
       fwdReq.write(body);
       fwdReq.end();
     });
