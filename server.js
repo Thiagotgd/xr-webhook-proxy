@@ -8,6 +8,25 @@ const TARGET_WEBHOOK_TOKEN = process.env.TARGET_WEBHOOK_TOKEN || 'zo02xvbo62bps9
 // Current target URL for forwarding webhooks
 // Falls back to INITIAL_TARGET env var on cold start (Render free tier resets memory)
 let targetUrl = process.env.INITIAL_TARGET || '';
+// Destinos extras: recebem uma copia do webhook (fire-and-forget); erro neles nao afeta o destino principal
+const EXTRA_TARGETS = (process.env.EXTRA_TARGETS || '').split(',').map(s => s.trim()).filter(Boolean);
+function forwardExtra(body, srcHeaders) {
+  for (const t of EXTRA_TARGETS) {
+    try {
+      const u = new URL(t.replace(/\/+$/, '') + '/webhook/cfaz');
+      if (TARGET_WEBHOOK_TOKEN && !u.searchParams.get('token')) u.searchParams.set('token', TARGET_WEBHOOK_TOKEN);
+      const headers = { 'Content-Type': srcHeaders['content-type'] || 'application/json', 'Content-Length': Buffer.byteLength(body) };
+      if (TARGET_WEBHOOK_TOKEN) headers['X-Webhook-Token'] = TARGET_WEBHOOK_TOKEN;
+      const proto = u.protocol === 'https:' ? https : http;
+      const rq = proto.request({ hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80), path: u.pathname + u.search, method: 'POST', headers }, (rs) => {
+        rs.resume(); console.log(`[PROXY] Extra ${u.hostname}:${u.port} -> ${rs.statusCode}`);
+      });
+      rq.on('error', (e) => console.log(`[PROXY] Extra ${t} erro: ${e.message}`));
+      rq.setTimeout(8000, () => rq.destroy());
+      rq.write(body); rq.end();
+    } catch (e) { console.log(`[PROXY] Extra ${t} invalido: ${e.message}`); }
+  }
+}
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -79,6 +98,7 @@ const server = http.createServer((req, res) => {
         forwardUrl.searchParams.set('token', TARGET_WEBHOOK_TOKEN);
       }
       console.log(`[PROXY] Forwarding to: ${forwardUrl.toString()}`);
+      if (EXTRA_TARGETS.length) forwardExtra(body, req.headers);
 
       const parsed = forwardUrl;
       const options = {
